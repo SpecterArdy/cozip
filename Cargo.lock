@@ -1224,6 +1224,7 @@ dependencies = [
  "cozip_pdeflate",
  "cozip_util",
  "crc32fast",
+ "encoding_rs",
  "thiserror 2.0.17",
  "tokio",
 ]

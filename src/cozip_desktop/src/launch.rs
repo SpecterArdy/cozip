@@ -10,6 +10,23 @@ use cozip::{
 use cozip_pdeflate::{PDeflateOptions, pdeflate_stream_suggested_name};
 
 const DEFAULT_COZIP_EXTENSION: &str = "cozip";
+const INSPECT_TRACE_ENV: &str = "COZIP_INSPECT_TRACE";
+
+fn inspect_trace_log(message: impl AsRef<str>) {
+    if env::var_os(INSPECT_TRACE_ENV).is_none() {
+        return;
+    }
+    let path = std::env::temp_dir().join("cozip-inspect-trace.log");
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    else {
+        return;
+    };
+    let _ = std::io::Write::write_all(&mut file, message.as_ref().as_bytes());
+    let _ = std::io::Write::write_all(&mut file, b"\n");
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InitialScreen {
@@ -343,11 +360,22 @@ fn build_extract_plan(inputs: Vec<PathBuf>) -> Result<ExtractPlan, String> {
         return Err("no archives were provided".to_string());
     }
 
+    inspect_trace_log(format!(
+        "[desktop_extract] build_extract_plan begin inputs={}",
+        inputs.len()
+    ));
     let mut tasks = Vec::new();
     let mut ignored = Vec::new();
     let mut seen = BTreeSet::new();
 
     for input in inputs {
+        inspect_trace_log(format!(
+            "[desktop_extract] inspect_input path={} exists={} is_file={} is_dir={}",
+            input.display(),
+            input.exists(),
+            input.is_file(),
+            input.is_dir()
+        ));
         if !input.exists() {
             ignored.push(input);
             continue;
@@ -356,6 +384,12 @@ fn build_extract_plan(inputs: Vec<PathBuf>) -> Result<ExtractPlan, String> {
         if input.is_file() {
             match inspect_archive_from_name(&input) {
                 Ok(info) => {
+                    inspect_trace_log(format!(
+                        "[desktop_extract] inspect_archive_ok path={} format={:?} kind={:?}",
+                        input.display(),
+                        info.format,
+                        info.kind
+                    ));
                     if seen.insert(input.clone()) {
                         tasks.push(build_extract_task(
                             input.clone(),
@@ -364,7 +398,12 @@ fn build_extract_plan(inputs: Vec<PathBuf>) -> Result<ExtractPlan, String> {
                         ));
                     }
                 }
-                Err(_) => {
+                Err(error) => {
+                    inspect_trace_log(format!(
+                        "[desktop_extract] inspect_archive_err path={} error={}",
+                        input.display(),
+                        error
+                    ));
                     if is_probable_pdeflate_archive_path(&input) && seen.insert(input.clone()) {
                         tasks.push(build_extract_task(
                             input.clone(),
@@ -377,6 +416,10 @@ fn build_extract_plan(inputs: Vec<PathBuf>) -> Result<ExtractPlan, String> {
                             ExtractDecodeHint::Parallel,
                         ));
                     } else {
+                        inspect_trace_log(format!(
+                            "[desktop_extract] ignored_file path={}",
+                            input.display()
+                        ));
                         ignored.push(input);
                     }
                 }
@@ -396,6 +439,12 @@ fn build_extract_plan(inputs: Vec<PathBuf>) -> Result<ExtractPlan, String> {
                     continue;
                 }
                 if let Ok(info) = inspect_archive_from_name(&path) {
+                    inspect_trace_log(format!(
+                        "[desktop_extract] inspect_archive_ok path={} format={:?} kind={:?}",
+                        path.display(),
+                        info.format,
+                        info.kind
+                    ));
                     if seen.insert(path.clone()) {
                         tasks.push(build_extract_task(
                             path.clone(),
@@ -414,6 +463,11 @@ fn build_extract_plan(inputs: Vec<PathBuf>) -> Result<ExtractPlan, String> {
                         },
                         ExtractDecodeHint::Parallel,
                     ));
+                } else {
+                    inspect_trace_log(format!(
+                        "[desktop_extract] ignored_child path={}",
+                        path.display()
+                    ));
                 }
             }
             continue;
@@ -423,6 +477,7 @@ fn build_extract_plan(inputs: Vec<PathBuf>) -> Result<ExtractPlan, String> {
     }
 
     if tasks.is_empty() {
+        inspect_trace_log("[desktop_extract] no_supported_archives");
         return Err("no supported archives were found in the selection".to_string());
     }
 
@@ -431,6 +486,11 @@ fn build_extract_plan(inputs: Vec<PathBuf>) -> Result<ExtractPlan, String> {
         .and_then(|task| task.archive_path.parent().map(Path::to_path_buf))
         .unwrap_or_else(|| PathBuf::from("."));
 
+    inspect_trace_log(format!(
+        "[desktop_extract] build_extract_plan ok tasks={} ignored={}",
+        tasks.len(),
+        ignored.len()
+    ));
     Ok(ExtractPlan {
         tasks,
         ignored_inputs: ignored,
@@ -479,8 +539,28 @@ fn build_extract_task(
 
 fn extract_decode_hint_for_path(path: &Path) -> ExtractDecodeHint {
     match inspect_archive_decode_hint_from_name(path) {
-        Ok(CoZipArchiveDecodeHint::Parallel) => ExtractDecodeHint::Parallel,
-        Ok(CoZipArchiveDecodeHint::SingleThread) | Err(_) => ExtractDecodeHint::SingleThread,
+        Ok(CoZipArchiveDecodeHint::Parallel) => {
+            inspect_trace_log(format!(
+                "[desktop_extract] decode_hint path={} hint=parallel",
+                path.display()
+            ));
+            ExtractDecodeHint::Parallel
+        }
+        Ok(CoZipArchiveDecodeHint::SingleThread) => {
+            inspect_trace_log(format!(
+                "[desktop_extract] decode_hint path={} hint=single_thread",
+                path.display()
+            ));
+            ExtractDecodeHint::SingleThread
+        }
+        Err(error) => {
+            inspect_trace_log(format!(
+                "[desktop_extract] decode_hint_err path={} error={}",
+                path.display(),
+                error
+            ));
+            ExtractDecodeHint::SingleThread
+        }
     }
 }
 

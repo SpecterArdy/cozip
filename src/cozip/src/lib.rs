@@ -16,9 +16,21 @@ use cozip_pdeflate::{
     pdeflate_stream_suggested_name, pdeflate_stream_uncompressed_size,
 };
 use cozip_util::{ParallelFileWriter, ParallelFileWriterOptions};
+use encoding_rs::SHIFT_JIS;
 use thiserror::Error;
 
 pub use cozip_pdeflate::PDeflateOptions;
+
+fn inspect_trace_log(message: impl AsRef<str>) {
+    if env::var_os(INSPECT_TRACE_ENV).is_none() {
+        return;
+    }
+    let path = std::env::temp_dir().join("cozip-inspect-trace.log");
+    let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) else {
+        return;
+    };
+    let _ = writeln!(file, "{}", message.as_ref());
+}
 
 const LOCAL_FILE_HEADER_SIG: u32 = 0x0403_4b50;
 const CENTRAL_DIR_HEADER_SIG: u32 = 0x0201_4b50;
@@ -54,6 +66,7 @@ const PDEFLATE_DIR_ARCHIVE_RECORD_DIR: u8 = 2;
 const PDEFLATE_DIR_FILE_MAGIC: [u8; 4] = *b"CZPD";
 const PDEFLATE_DIR_FILE_VERSION_V1: u8 = 1;
 const PDEFLATE_DIR_FILE_VERSION_V2: u8 = 2;
+const INSPECT_TRACE_ENV: &str = "COZIP_INSPECT_TRACE";
 const ZIP_DIR_VERIFY_TRACE_ENV: &str = "COZIP_ZIP_DIR_VERIFY_TRACE";
 
 static ZIP_DIR_VERIFY_TRACE_LINES: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
@@ -2643,19 +2656,44 @@ pub fn inspect_archive_from_name<P: AsRef<Path>>(
     input_path: P,
 ) -> Result<CoZipArchiveInfo, CoZipError> {
     let input_path = input_path.as_ref();
+    inspect_trace_log(format!(
+        "[inspect] begin path={}",
+        input_path.display()
+    ));
     let mut input = StdFile::open(input_path)?;
     let mut magic = [0_u8; 4];
     let read_len = input.read(&mut magic)?;
     input.seek(SeekFrom::Start(0))?;
+    inspect_trace_log(format!(
+        "[inspect] magic path={} read_len={} magic={:02x?}",
+        input_path.display(),
+        read_len,
+        &magic[..read_len.min(magic.len())]
+    ));
 
     if read_len >= 2 && magic[..2] == *b"PK" {
+        inspect_trace_log(format!(
+            "[inspect] zip_signature path={}",
+            input_path.display()
+        ));
         let kind = match inspect_zip_archive_kind(&input)? {
             ZipArchiveKind::SingleFile { entry_name } => {
+                inspect_trace_log(format!(
+                    "[inspect] zip_kind path={} kind=single_file entry_name={}",
+                    input_path.display(),
+                    entry_name
+                ));
                 CoZipArchiveKind::SingleFile {
                     suggested_name: entry_name,
                 }
             }
-            ZipArchiveKind::Directory => CoZipArchiveKind::Directory,
+            ZipArchiveKind::Directory => {
+                inspect_trace_log(format!(
+                    "[inspect] zip_kind path={} kind=directory",
+                    input_path.display()
+                ));
+                CoZipArchiveKind::Directory
+            }
         };
         return Ok(CoZipArchiveInfo {
             format: CoZipArchiveFormat::Zip,
@@ -2664,9 +2702,17 @@ pub fn inspect_archive_from_name<P: AsRef<Path>>(
     }
 
     if read_len == 4 && (magic == *b"PDS0" || magic == PDEFLATE_DIR_FILE_MAGIC) {
+        inspect_trace_log(format!(
+            "[inspect] pdeflate_signature path={}",
+            input_path.display()
+        ));
         let is_directory = inspect_pdeflate_directory_header(&input)?.is_some();
         input.seek(SeekFrom::Start(0))?;
         let kind = if is_directory {
+            inspect_trace_log(format!(
+                "[inspect] pdeflate_kind path={} kind=directory",
+                input_path.display()
+            ));
             CoZipArchiveKind::Directory
         } else {
             let suggested_name = pdeflate_stream_suggested_name(&mut input)
@@ -2680,6 +2726,11 @@ pub fn inspect_archive_from_name<P: AsRef<Path>>(
                         .map(str::to_string)
                 })
                 .unwrap_or_else(|| DEFAULT_ENTRY_NAME.to_string());
+            inspect_trace_log(format!(
+                "[inspect] pdeflate_kind path={} kind=single_file suggested_name={}",
+                input_path.display(),
+                suggested_name
+            ));
             CoZipArchiveKind::SingleFile { suggested_name }
         };
         return Ok(CoZipArchiveInfo {
@@ -2688,6 +2739,10 @@ pub fn inspect_archive_from_name<P: AsRef<Path>>(
         });
     }
 
+    inspect_trace_log(format!(
+        "[inspect] unsupported_signature path={}",
+        input_path.display()
+    ));
     Err(CoZipError::InvalidZip("unsupported archive signature"))
 }
 
@@ -2695,6 +2750,10 @@ pub fn inspect_archive_decode_hint_from_name<P: AsRef<Path>>(
     input_path: P,
 ) -> Result<CoZipArchiveDecodeHint, CoZipError> {
     let input_path = input_path.as_ref();
+    inspect_trace_log(format!(
+        "[inspect_hint] begin path={}",
+        input_path.display()
+    ));
     let mut input = StdFile::open(input_path)?;
     let mut magic = [0_u8; 4];
     let read_len = input.read(&mut magic)?;
@@ -2715,16 +2774,34 @@ pub fn inspect_archive_decode_hint_from_name<P: AsRef<Path>>(
             })
         };
         return Ok(if is_parallel {
+            inspect_trace_log(format!(
+                "[inspect_hint] path={} hint=parallel file_entries={}",
+                input_path.display(),
+                file_entries.len()
+            ));
             CoZipArchiveDecodeHint::Parallel
         } else {
+            inspect_trace_log(format!(
+                "[inspect_hint] path={} hint=single_thread file_entries={}",
+                input_path.display(),
+                file_entries.len()
+            ));
             CoZipArchiveDecodeHint::SingleThread
         });
     }
 
     if read_len == 4 && (magic == *b"PDS0" || magic == PDEFLATE_DIR_FILE_MAGIC) {
+        inspect_trace_log(format!(
+            "[inspect_hint] path={} hint=parallel_pdeflate",
+            input_path.display()
+        ));
         return Ok(CoZipArchiveDecodeHint::Parallel);
     }
 
+    inspect_trace_log(format!(
+        "[inspect_hint] unsupported_signature path={}",
+        input_path.display()
+    ));
     Err(CoZipError::InvalidZip("unsupported archive signature"))
 }
 
@@ -3358,6 +3435,80 @@ fn verify_written_zip_archive(output_path: &Path, deflate: &CoZipDeflate) -> Res
     Ok(())
 }
 
+const CP437_HIGH_CHARS: [char; 128] = [
+    'Ç', 'ü', 'é', 'â', 'ä', 'à', 'å', 'ç', 'ê', 'ë', 'è', 'ï', 'î', 'ì', 'Ä', 'Å',
+    'É', 'æ', 'Æ', 'ô', 'ö', 'ò', 'û', 'ù', 'ÿ', 'Ö', 'Ü', '¢', '£', '¥', '₧', 'ƒ',
+    'á', 'í', 'ó', 'ú', 'ñ', 'Ñ', 'ª', 'º', '¿', '⌐', '¬', '½', '¼', '¡', '«', '»',
+    '░', '▒', '▓', '│', '┤', '╡', '╢', '╖', '╕', '╣', '║', '╗', '╝', '╜', '╛', '┐',
+    '└', '┴', '┬', '├', '─', '┼', '╞', '╟', '╚', '╔', '╩', '╦', '╠', '═', '╬', '╧',
+    '╨', '╤', '╥', '╙', '╘', '╒', '╓', '╫', '╪', '┘', '┌', '█', '▄', '▌', '▐', '▀',
+    'α', 'ß', 'Γ', 'π', 'Σ', 'σ', 'µ', 'τ', 'Φ', 'Θ', 'Ω', 'δ', '∞', 'φ', 'ε', '∩',
+    '≡', '±', '≥', '≤', '⌠', '⌡', '÷', '≈', '°', '∙', '·', '√', 'ⁿ', '²', '■', '\u{00A0}',
+];
+
+fn decode_cp437(bytes: &[u8]) -> String {
+    bytes.iter()
+        .map(|&byte| {
+            if byte < 0x80 {
+                char::from(byte)
+            } else {
+                CP437_HIGH_CHARS[usize::from(byte - 0x80)]
+            }
+        })
+        .collect()
+}
+
+fn contains_probably_japanese_text(text: &str) -> bool {
+    text.chars().any(|ch| {
+        matches!(
+            ch as u32,
+            0x3040..=0x30FF | 0x31F0..=0x31FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xFF61..=0xFF9F | 0xFFE0..=0xFFEE
+        )
+    })
+}
+
+fn decode_zip_entry_name(name_bytes: &[u8], gp_flags: u16) -> Result<String, CoZipError> {
+    if (gp_flags & GP_FLAG_UTF8) != 0 {
+        let decoded = String::from_utf8(name_bytes.to_vec()).map_err(|_| CoZipError::NonUtf8Name)?;
+        inspect_trace_log(format!(
+            "[inspect_zip] decode_name encoding=utf8_flag value={}",
+            decoded
+        ));
+        return Ok(decoded);
+    }
+
+    if let Ok(decoded) = std::str::from_utf8(name_bytes) {
+        inspect_trace_log(format!(
+            "[inspect_zip] decode_name encoding=utf8_fallback value={}",
+            decoded
+        ));
+        return Ok(decoded.to_string());
+    }
+
+    let cp437 = decode_cp437(name_bytes);
+    let (shift_jis_decoded, _, shift_jis_had_errors) = SHIFT_JIS.decode(name_bytes);
+    if !shift_jis_had_errors {
+        let candidate = shift_jis_decoded.into_owned();
+        let (reencoded, _, reencode_had_errors) = SHIFT_JIS.encode(&candidate);
+        if !reencode_had_errors
+            && reencoded.as_ref() == name_bytes
+            && contains_probably_japanese_text(&candidate)
+        {
+            inspect_trace_log(format!(
+                "[inspect_zip] decode_name encoding=shift_jis value={}",
+                candidate
+            ));
+            return Ok(candidate);
+        }
+    }
+
+    inspect_trace_log(format!(
+        "[inspect_zip] decode_name encoding=cp437 value={}",
+        cp437
+    ));
+    Ok(cp437)
+}
+
 #[derive(Debug, Clone)]
 struct ZipCentralReadEntry {
     name: String,
@@ -3392,6 +3543,10 @@ fn read_central_directory_entries<R: Read + Seek>(
     reader: &mut R,
 ) -> Result<(Vec<ZipCentralReadEntry>, u64), CoZipError> {
     let file_len = reader.seek(SeekFrom::End(0))?;
+    inspect_trace_log(format!(
+        "[inspect_zip] read_central_directory_entries begin file_len={}",
+        file_len
+    ));
     let eocd = read_eocd(reader, file_len)?;
     let czdi_eocd_blob = match eocd.zip64_extensible_data.as_deref() {
         Some(ext) => decode_czdi_eocd64_blob(ext)?,
@@ -3483,7 +3638,7 @@ fn read_central_directory_entries<R: Read + Seek>(
 
         let mut name = vec![0_u8; name_len];
         reader.read_exact(&mut name)?;
-        let name = String::from_utf8(name).map_err(|_| CoZipError::NonUtf8Name)?;
+        let name = decode_zip_entry_name(&name, gp_flags)?;
 
         // Read extra field data
         let mut extra_data = vec![0_u8; extra_len];
@@ -3542,6 +3697,12 @@ fn read_central_directory_entries<R: Read + Seek>(
         });
     }
 
+    inspect_trace_log(format!(
+        "[inspect_zip] read_central_directory_entries ok entries={} central_offset={} central_size={}",
+        entries.len(),
+        eocd.central_offset,
+        eocd.central_size
+    ));
     Ok((entries, file_len))
 }
 
@@ -3780,6 +3941,10 @@ struct ZipExtractFileTask {
 }
 
 fn read_eocd<R: Read + Seek>(reader: &mut R, file_len: u64) -> Result<Eocd, CoZipError> {
+    inspect_trace_log(format!(
+        "[inspect_zip] read_eocd begin file_len={}",
+        file_len
+    ));
     if file_len < 22 {
         return Err(CoZipError::InvalidZip("file too small for EOCD"));
     }
@@ -3791,10 +3956,25 @@ fn read_eocd<R: Read + Seek>(reader: &mut R, file_len: u64) -> Result<Eocd, CoZi
     let mut tail = vec![0_u8; usize::try_from(search_len).map_err(|_| CoZipError::DataTooLarge)?];
     reader.read_exact(&mut tail)?;
 
-    let rel = find_eocd(&tail).ok_or(CoZipError::InvalidZip("EOCD not found"))?;
+    let rel = match find_eocd(&tail) {
+        Some(rel) => rel,
+        None => {
+            inspect_trace_log(format!(
+                "[inspect_zip] read_eocd missing file_len={} search_start={} search_len={}",
+                file_len,
+                search_start,
+                search_len
+            ));
+            return Err(CoZipError::InvalidZip("EOCD not found"));
+        }
+    };
     let eocd_offset = search_start
         .checked_add(u64::try_from(rel).map_err(|_| CoZipError::DataTooLarge)?)
         .ok_or(CoZipError::DataTooLarge)?;
+    inspect_trace_log(format!(
+        "[inspect_zip] read_eocd found offset={}",
+        eocd_offset
+    ));
 
     let min_eocd_end = eocd_offset
         .checked_add(22)
@@ -3818,12 +3998,19 @@ fn read_eocd<R: Read + Seek>(reader: &mut R, file_len: u64) -> Result<Eocd, CoZi
         return Err(CoZipError::InvalidZip("ZIP64 EOCD locator not found"));
     }
 
-    Ok(Eocd {
+    let eocd = Eocd {
         entries: u64::from(entries_u16),
         central_size: u64::from(central_size_u32),
         central_offset: u64::from(central_offset_u32),
         zip64_extensible_data: None,
-    })
+    };
+    inspect_trace_log(format!(
+        "[inspect_zip] read_eocd ok entries={} central_offset={} central_size={} zip64=false",
+        eocd.entries,
+        eocd.central_offset,
+        eocd.central_size
+    ));
+    Ok(eocd)
 }
 
 fn try_read_zip64_eocd<R: Read + Seek>(
@@ -5034,20 +5221,35 @@ fn normalize_zip_entry_name(name: &str) -> Result<String, CoZipError> {
 fn inspect_zip_archive_kind(input_file: &StdFile) -> Result<ZipArchiveKind, CoZipError> {
     let mut reader = BufReader::new(input_file);
     let (entries, _) = read_central_directory_entries(&mut reader)?;
+    inspect_trace_log(format!(
+        "[inspect_zip] archive_kind entries={}",
+        entries.len()
+    ));
     classify_zip_archive_kind(&entries)
 }
 
 fn classify_zip_archive_kind(
     entries: &[ZipCentralReadEntry],
 ) -> Result<ZipArchiveKind, CoZipError> {
+    let file_entries = entries.iter().filter(|entry| !entry.name.ends_with('/')).count();
+    inspect_trace_log(format!(
+        "[inspect_zip] classify entries={} file_entries={}",
+        entries.len(),
+        file_entries
+    ));
     if entries.len() == 1 {
         let entry = &entries[0];
         if !entry.name.ends_with('/') && !entry.name.contains('/') {
+            inspect_trace_log(format!(
+                "[inspect_zip] classify result=single_file entry_name={}",
+                entry.name
+            ));
             return Ok(ZipArchiveKind::SingleFile {
                 entry_name: normalize_zip_entry_name(&entry.name)?,
             });
         }
     }
+    inspect_trace_log("[inspect_zip] classify result=directory");
     Ok(ZipArchiveKind::Directory)
 }
 
