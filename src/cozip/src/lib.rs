@@ -48,6 +48,7 @@ const STREAM_BUF_SIZE: usize = 256 * 1024;
 const PDEFLATE_DIR_PARALLEL_WRITE_BACKLOG_BYTES: usize = 2 * 1024 * 1024 * 1024;
 const PDEFLATE_DIR_PARALLEL_READ_BACKLOG_BYTES: usize = 2 * 1024 * 1024 * 1024;
 const PDEFLATE_DIR_CURRENT_FILE_READ_RESERVE_BYTES: usize = 256 * 1024 * 1024;
+const PDEFLATE_DIR_MAX_OPEN_FILES: usize = 64;
 
 const ZIP64_EXTRA_FIELD_TAG: u16 = 0x0001;
 const ZIP64_EOCD_SIG: u32 = 0x0606_4b50;
@@ -4188,6 +4189,7 @@ impl PDeflateArchiveReader {
     fn prime_prefetch(&mut self) -> Result<(), io::Error> {
         while self.prefetched_bytes < PDEFLATE_DIR_PARALLEL_READ_BACKLOG_BYTES
             && self.prefetch_index < self.entries.len()
+            && self.prefetched_files.len() < PDEFLATE_DIR_MAX_OPEN_FILES
         {
             if self.entries[self.prefetch_index].kind != PDeflateArchiveEntryKind::File {
                 self.prefetch_index = self.prefetch_index.saturating_add(1);
