@@ -34,6 +34,35 @@ cargo check --workspace
 cargo test --workspace
 ```
 
+## `cozip_desktop` Arguments
+
+Running `cozip_desktop` without arguments opens the desktop application on the
+compress screen.
+
+```bash
+cozip_desktop
+```
+
+Supported command forms:
+
+```bash
+cozip_desktop compress [--format zip|cozip] [--hybrid] <path>...
+cozip_desktop extract --here <archive-or-directory>...
+cozip_desktop ui compress-details [--format zip|cozip] [--hybrid] <path>...
+cozip_desktop ui extract-details <archive-or-directory>...
+```
+
+Argument details:
+
+- `compress`: builds a compression plan and starts it immediately.
+- `extract`: builds an extraction plan and starts it immediately. `--here` is currently required for this auto-start path.
+- `ui compress-details`: opens the compression settings screen with the selected paths preloaded.
+- `ui extract-details`: opens the extraction settings screen with the selected archives preloaded.
+- `--format zip|cozip`: selects the output archive format for compression. The default is `zip`.
+- `--hybrid`: requests hybrid CPU/GPU deflate mode for ZIP compression. It is accepted for CoZip/PDeflate commands, but currently only changes ZIP options.
+- `<path>...`: one or more files or directories for compression.
+- `<archive-or-directory>...`: one or more archives, or directories containing supported archives, for extraction.
+
 ## `cozip_deflate` Quick Use
 
 ```rust

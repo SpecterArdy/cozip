@@ -34,6 +34,34 @@ cargo check --workspace
 cargo test --workspace
 ```
 
+## `cozip_desktop` の引数
+
+引数なしで `cozip_desktop` を実行すると、デスクトップアプリの圧縮画面を開きます。
+
+```bash
+cozip_desktop
+```
+
+対応しているコマンド形式:
+
+```bash
+cozip_desktop compress [--format zip|cozip] [--hybrid] <path>...
+cozip_desktop extract --here <archive-or-directory>...
+cozip_desktop ui compress-details [--format zip|cozip] [--hybrid] <path>...
+cozip_desktop ui extract-details <archive-or-directory>...
+```
+
+引数の詳細:
+
+- `compress`: 圧縮プランを作成し、すぐに圧縮を開始します。
+- `extract`: 展開プランを作成し、すぐに展開を開始します。この自動開始経路では現在 `--here` が必須です。
+- `ui compress-details`: 選択したパスを読み込んだ状態で圧縮設定画面を開きます。
+- `ui extract-details`: 選択したアーカイブを読み込んだ状態で展開設定画面を開きます。
+- `--format zip|cozip`: 圧縮時の出力アーカイブ形式を選びます。既定値は `zip` です。
+- `--hybrid`: ZIP 圧縮で CPU/GPU ハイブリッド deflate mode を要求します。CoZip/PDeflate のコマンドでも受け付けますが、現在オプションが変わるのは ZIP 側のみです。
+- `<path>...`: 圧縮対象のファイルまたはディレクトリを 1 つ以上指定します。
+- `<archive-or-directory>...`: 展開対象のアーカイブ、または対応アーカイブを含むディレクトリを 1 つ以上指定します。
+
 ## `cozip_deflate` の基本利用
 
 ```rust
